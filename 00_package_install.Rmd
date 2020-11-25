@@ -1,0 +1,108 @@
+---
+title: "01_data-import"
+output:
+  html_document:
+    df_print: paged
+---
+```{bash}
+wget https://mothur.s3.us-east-2.amazonaws.com/wiki/miseqsopdata.zip
+```
+```{bash}
+unzip miseqsopdata.zip
+```
+
+
+
+# update VM configuration
+``` {bash}
+sudo apt-get update -y 
+sudo apt-get install -y libbz2-dev
+sudo apt-get install -y liblzma-dev
+```
+
+
+#package install
+
+Following instruction on https://benjjneb.github.io/dada2/dada-installation.html
+
+```{r package install}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install(version = '3.11')
+BiocManager::install("dada2", version = "3.11")
+```
+"
+there should be no fatal error message looking like "non 0 exit status"
+
+! save your notebook
+
+
+#package install
+```{r package install}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install("phangorn")
+BiocManager::install("DECIPHER")
+```
+
+```{r}
+install.packages("gridExtra")
+```
+```{r}
+BiocManager::install("Biostrings")
+```
+
+```{r}
+BiocManager::install ("ggplot2")
+```
+```{r}
+.cran_packages <- c( "shiny","miniUI", "caret", "pls", "e1071", "ggplot2", "randomForest", "dplyr", "ggrepel", "nlme", "devtools",
+                  "reshape2", "PMA", "structSSI", "ade4",
+                  "ggnetwork", "intergraph", "scales")
+.github_packages <- c("jfukuyama/phyloseqGraphTest")
+.bioc_packages <- c("genefilter", "impute")
+```
+
+```{r}
+install.packages(.cran_packages)
+devtools::install_github(.github_packages)
+BiocManager::install(.bioc_packages
+                     )
+```
+```{r}
+BiocManager::install("DESeq2")
+```
+
+
+```{r}
+BiocManager::install("structSSI")
+```
+```{r}
+install.packages("structSSI")
+```
+```{bash}
+wget https://cran.r-project.org/src/contrib/Archive/structSSI/structSSI_1.1.1.tar.gz
+```
+```{r}
+library(devtools)
+install_local("~./structSSI_1.1.1.tar.gz")
+```
+```{bash}
+wget https://cran.r-project.org/src/contrib/Archive/structSSI/structSSI_1.1.1.tar.gz
+```
+```{r}
+library(devtools)
+install_local("./structSSI_1.1.1.tar.gz")
+```
+
+
+##Installation gitub
+
+
+```{r}
+install.packages("usethis")
+```
+```{r}
+use_git_config(user.name = "Saadtouzi", user.email = "touzisaad@gmail.com")
+```
+
