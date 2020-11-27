@@ -1,13 +1,23 @@
 ---
 title: "Dada2 tutorial"
-output: html_notebook
+output: 
+  github_document:
+   toc: true
+   toc_depth: 2
 ---
+
 ```{r}
-library("dada2")
+library(rmarkdown)
+library(knitr)
 ```
 
 ```{r}
-path <- "~/MiSeq_SOP" # CHANGE ME to the directory containing the fastq files after unzipping.
+library("dada2")
+library("ggplot2")
+```
+
+```{r}
+path <- "~/phyloseq_tuto/MiSeq_SOP" # CHANGE ME to the directory containing the fastq files after unzipping.
 list.files(path)
 ```
 
