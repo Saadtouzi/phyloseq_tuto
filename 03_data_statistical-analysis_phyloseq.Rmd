@@ -1,8 +1,21 @@
 ---
 title: "R phyloseq"
-output: html_notebook
+output: 
+  github_document:
+   toc: true
+   toc_depth: 2
 ---
 
+```{r}
+library(rmarkdown)
+library(knitr)
+```
+
+#Ce code a pour bute de lier les données DADA2 à Phyloseq (C'est la continuité du dernier code du script DADA2)
+```{r}
+load("~/phyloseq_tuto/02_dada-analysist")
+```
+#Chargement des packages nécessaires pour les analyses.
 
 ```{r}
 packageVersion("phyloseq")
@@ -21,17 +34,7 @@ library(ggplot2)
 library(Biostrings)
 ```
 
-```{r}
-samples.out <- rownames(seqtab.nochim)
-subject <- sapply(strsplit(samples.out, "D"), `[`, 1)
-gender <- substr(subject,1,1)
-subject <- substr(subject,2,999)
-day <- as.integer(sapply(strsplit(samples.out, "D"), `[`, 2))
-samdf <- data.frame(Subject=subject, Gender=gender, Day=day)
-samdf$When <- "Early"
-samdf$When[samdf$Day>100] <- "Late"
-rownames(samdf) <- samples.out
-```
+#Ce code a pour but d'ajouter une nouvelle table avec l'objet qui va permettre plus tard la construction de l'arbre phylogénétique
 
 ```{r}
 library(phangorn)
@@ -49,43 +52,8 @@ fitGTR <- optim.pml(fitGTR, model="GTR", optInv=TRUE, optGamma=TRUE,
         rearrangement = "stochastic", control = pml.control(trace = 0))
 detach("package:phangorn", unload=TRUE)
 ```
+# 1- Importation des métadonnées pour l'analyse 
 
-
-```{r}
-ps <- phyloseq(otu_table(seqtab.nochim, taxa_are_rows=FALSE), 
-               sample_data(samdf), 
-               tax_table(taxa),phy_tree(fitGTR$tree))
-ps <- prune_samples(sample_names(ps) != "Mock", ps) # Remove mock sample
-ps
-```
-
-```{r}
-dna <- Biostrings::DNAStringSet(taxa_names(ps))
-names(dna) <- taxa_names(ps)
-ps <- merge_phyloseq(ps, dna)
-taxa_names(ps) <- paste0("ASV", seq(ntaxa(ps)))
-ps
-```
-```{r}
-plot_richness(ps, x="Day", measures=c("Shannon", "Simpson"), color="When")
-```
-#Ordination
-
-```{r}
-# Transform data to proportions as appropriate for Bray-Curtis distances
-ps.prop <- transform_sample_counts(ps, function(otu) otu/sum(otu))
-ord.nmds.bray <- ordinate(ps.prop, method="NMDS", distance="bray")
-```
-```{r}
-plot_ordination(ps.prop, ord.nmds.bray, color="When", title="Bray NMDS")
-```
-```{r}
-top20 <- names(sort(taxa_sums(ps), decreasing=TRUE))[1:20]
-ps.top20 <- transform_sample_counts(ps, function(OTU) OTU/sum(OTU))
-ps.top20 <- prune_taxa(top20, ps.top20)
-plot_bar(ps.top20, x="Day", fill="Family") + facet_wrap(~When, scales="free_x")
-```
-##Charger les métadonnées de github
 ```{r}
 ps_connect <-url("https://raw.githubusercontent.com/spholmes/F1000_workflow/master/data/ps.rds")
 ps = readRDS(ps_connect)
@@ -93,47 +61,54 @@ ps
 ```
 
 
-#Taxonomic_filtering
+# 2- Filtration
+## a) Filtration taxonomique
+
+#Ici une table est crée avec le nombre d'échantillons correspondant à chaque phylums, en plus des échantillons non classés (NA). Ils sont 6 au total.
 ```{r}
 library("phyloseq")
 rank_names(ps)
 ```
-
-# Create table, number of features for each phyla
 ```{r}
 table(tax_table(ps)[, "Phylum"], exclude = NULL)
 ```
+#Ici les echantillons non classés vont être supprimés.
 ```{r}
 ps <- subset_taxa(ps, !is.na(Phylum) & !Phylum %in% c("", "uncharacterized"))
 ```
-# Compute prevalence of each feature, store as data.frame
+#Ensuite la prévalence de chaque échantillon est calculée et ensuite enregistrée sous forme de data.frame
 ```{r}
 prevdf = apply(X = otu_table(ps),
                MARGIN = ifelse(taxa_are_rows(ps), yes = 1, no = 2),
                FUN = function(x){sum(x > 0)})
 ```
 
-# Add taxonomy and total read counts to this data.frame
+#Puis les taxas et le nombre total des reads est ajouté à ce data.frame
 ```{r}
 prevdf = data.frame(Prevalence = prevdf,
                     TotalAbundance = taxa_sums(ps),
                     tax_table(ps))
 ```
-#Compute total and average prevalences
+
+#Ensuite, et à l'aide de la fonction cbind, on va créer une table pour représenter les préalences qu'on vien de calculer, et comme çà on va pouvoir detecter les échantillons les plus abondants et les echantillons rares.
 ```{r}
 plyr::ddply(prevdf, "Phylum", function(df1){cbind(mean(df1$Prevalence),sum(df1$Prevalence))})
 ```
-# Define phyla to filter
+#On remarque dans le tableau au dessus, que Deinococcus-Thermus etFusobacteria apparaissent à peine dans 1% des echantillons. Ils peuvent être du à une erreur de séquençage et donc il vaut mieux les supprimer en utilisant le code suivant.
+
 ```{r}
 filterPhyla = c("Deinococcus-Thermus", "Fusobacteria")
 ```
-# Filter entries with unidentified Phylum
+#Après cette filtration un nouvau objet ps1 est créer pour inclure les modifications appliquées.
 ```{r}
 ps1 = subset_taxa(ps, !Phylum %in% filterPhyla)
 ps1
 ```
 
-##Prevalence Filtering
+## b)  Filtration de la prévalence
+#Les filtrations appliquées avant cette étape on été réalisé de façon dépendante des bases de données. En revanche, la filtration de la prévalence sera faite indépendamments de ces derniers, ça veut dire en se basant sur l'analyse de nos propres données
+
+#Pour définir les paramètres de filtration des données, la relation entre la prévalence et l'abondance totale doit être établie. Cela va avoir pour but de détecter les valeurs abérantes et de la supprimer par la suite. Sur les graphes ci-dessous chaque point est une séquence appartenant à un phylum. On remarque que les firmicutes sont les plus abondantes et que leurs prévalence augmente avec le temps.
 ```{r}
 library("ggplot2")
 prevdf1 = subset(prevdf, Phylum %in% get_taxa_unique(ps1, "Phylum"))
@@ -141,19 +116,20 @@ ggplot(prevdf1, aes(TotalAbundance, Prevalence / nsamples(ps),color=Phylum)) +ge
   scale_x_log10() +  xlab("Total Abundance") + ylab("Prevalence [Frac. Samples]") +
   facet_wrap(~Phylum) + theme(legend.position="none")
 ```
-# Define prevalence threshold as 5% of total samples
+#A partir des résultats obtenus, on peut alors définir un seul classique de prévalence de 5% en utilisant le code suivant.
 ```{r}
 prevalenceThreshold = 0.05 * nsamples(ps)
 prevalenceThreshold
 ```
-# Execute prevalence filter, using `prune_taxa()` function
+#Appliquation du seuil défini
 ```{r}
 keepTaxa = rownames(prevdf1)[(prevdf1$Prevalence >= prevalenceThreshold)]
 ps2 = prune_taxa(keepTaxa, ps)
 
 ```
-## Agglomération des données
-# How many genera would be present after filtering?
+# 3- Agglomération des données
+
+#Quand on est amené à analyser plusieurs données, il est souhaitable de les regroupé ou les agglomérer selon des critères en commen partagés par des bactéries proches. C'est ce qui va etre fait ici en utilisant l'arbre phylogénétique qui va regrouper les espèces provonant du même ancestre. Si les données ne sont pas suffisantes pour le faire, une autre altérnative est de spécifier une hauteur d'arbre correspondant à la distance phylogénétique entre les entités qui doivent définir leur regroupement.
 ```{r}
 length(get_taxa_unique(ps2, taxonomic.rank = "Genus"))
 ```
@@ -166,6 +142,8 @@ h1 = 0.4
 ps4 = tip_glom(ps2, h = h1)
 ```
 
+
+#La fonction plot_tree () de phyloseq compare les données originales non filtrées, l’arbre après l’agglomération taxonoïque et l’arbre après l’agglomération phylogénétique. 
 ```{r}
 multiPlotTitleTextSize = 15
 p2tree = plot_tree(ps2, method = "treeonly",
@@ -179,13 +157,17 @@ p4tree = plot_tree(ps4, method = "treeonly",
                    ladderize = "left", title = "By Height") +
   theme(plot.title = element_text(size = multiPlotTitleTextSize))
 ```
-# group plots together
+#Regroupement de l'ensemble des plots
 ```{r}
 library("gridExtra")
 grid.arrange(nrow = 1, p2tree, p3tree, p4tree)
 ```
+#Cette figure montre l'arbre d'origine à gauche, l'arbre après l'agglomération taxonomique au rang du genre au milieu et puis l'arbre après et l'agglomération phylogénétique à une distance fixe de 0,4 à droite. 
 
-#Abundance value transformation
+
+# 4-transformation des valeurs d'abondance.
+#Cette étape vise à transformer les données d'abondance, à fin de tenir en compte les différences de taille des bibliothèques, de variance etc... Ceci est possible par le package Phyloseq en utiisant la fonction transform_sample_counts(). 
+#Avec la fonction psmelt on va comparer les différences d'échelles et de distribution des valeurs d’abondances de l’objet phyloseq avant et après la transformation.
 ```{r}
 plot_abundance = function(physeq,title = "",
                           Facet = "Order", Color = "Phylum"){
@@ -203,11 +185,11 @@ plot_abundance = function(physeq,title = "",
 }
 ```
 
-# Transform to relative abundance. Save as new object.
+#ici Le premier argument est l'objet qu'on veut transformer qui est ps3 et le deuxième est une fonction R et qui définit la transformation. La transformation va être sauvé entant qu'objet qu'on va nommer ps3ra.
 ```{r}
 ps3ra = transform_sample_counts(ps3, function(x){x / sum(x)})
 ```
-
+#Ici on cherche à avoir la représentation graphique de l'abondance avant et et après la transformation.
 ```{r}
 plotBefore = plot_abundance(ps3,"")
 plotAfter = plot_abundance(ps3ra,"")
@@ -215,21 +197,31 @@ plotAfter = plot_abundance(ps3ra,"")
 grid.arrange(nrow = 1,  plotBefore, plotAfter)
 
 ```
-##Subset by taxonomy
+#Les graphes à droite montrent l'abondance à droite et l'abondance relative à gauche. On remarque que certains classes comme les bacilles ont augmenté en terme d'abondance relative. On remarque aussi que les lactobacillales ont une abondance relative bimodale.
+
+# 5- Sous-ensemble par taxonomie
+
+#Ici nous allons essayer d'expliquer la cause de ce qu'on a perçu pour la constatation de lactobacillales. Pour cela nous allons essayer d'analyser cette classe de façon isolée.
 ```{r}
 psOrd = subset_taxa(ps3ra, Order == "Lactobacillales")
 plot_abundance(psOrd, Facet = "Genus", Color = NULL)
 ```
-##Processing
+#La figure 5 montre les abondances relatives de l'ordre taxonomique des Lactobacillales, regroupées par sexe et genre d'hôte. Ici, il est clair que la distribution biomodale apparente des Lactobacillales sur la parcelle précédente était le résultat d'un mélange de deux genres différents, avec l'abondance relative typique de Lactobacillus beaucoup plus grande que Streptococcus.
+
+## Processing
+#Avant de faire les projections multivariées, nous ajouterons quelques colonnes à nos exemples de données, qui pourront ensuite être utilisées pour annoter les graphiques. 
 
 ```{r}
 qplot(sample_data(ps)$age, geom = "histogram",binwidth=20) + xlab("age")
 ```
+#À partir de la figure 6, nous voyons que les âges des souris sont répartis en deux groupes, et nous faisons donc une variable catégorielle correspondant aux souris jeunes, d'âge moyen et âgées. Nous enregistrons également le nombre total de dénombrements observés dans chaque échantillon et nous transformons les données en logarithme sous forme de transformation de stabilisation de la variance approximative.
+
 ```{r}
 qplot(log10(rowSums(otu_table(ps))),binwidth=0.2) +
   xlab("Logged counts-per-sample")
 ```
-##Normalization
+#L'histogramme de la figure 7 suggère qu'une transformation log (1 + x) pourrait être suffisante pour normaliser les données d'abondance pour les analyses statistiques.
+#Dans un premier temps, nous effectuons une PCoA avec l'indice Bray-Curtis et  Unifrac pondérée.
 ```{r}
 sample_data(ps)$age_binned <- cut(sample_data(ps)$age,
                           breaks = c(0, 100, 200, 400))
@@ -242,29 +234,32 @@ plot_ordination(pslog, out.wuf.log, color = "age_binned") +
   labs(col = "Binned Age") +
   coord_fixed(sqrt(evals[2] / evals[1]))
 ```
-##Relative abundance
+#L'analyse de la PcoA montre qu'il y'a certains points aberants (échantillons des femelles 5 et 6 au jour 165 et des échantillons des mâles 3, 4, 5 et 6 au jour 175). Ces derniers vont être éliminés.
+#Avant de continuer, nous devrions vérifier les deux valeurs aberrantes féminines - elles ont été reprises du même OTU / ASV, qui a une abondance relative de plus de 90% dans chacune d'elles. C'est la seule fois dans l'ensemble de données que cette ASV a une abondance relative aussi élevée - le reste du temps, elle est inférieure à 20%. En particulier, sa diversité est de loin la plus faible de tous les échantillons.
 ```{r}
 rel_abund <- t(apply(otu_table(ps), 1, function(x) x / sum(x)))
 qplot(rel_abund[, 12], geom = "histogram",binwidth=0.05) +
   xlab("Relative abundance")
 ```
-##Different Ordination Projections
-#Comptage des ordinations
+# 6- Différentes projections d'ordination
+## Comptage des ordinations
+#Après avoir documenté les valeurs aberrantes, nous allons calculer les ordinations avec ces valeurs aberrantes supprimées et étudier plus attentivement les données de sortie.
 ```{r}
 outliers <- c("F5D165", "F6D165", "M3D175", "M4D175", "M5D175", "M6D175")
 ps <- prune_samples(!(sample_names(ps) %in% outliers), ps)
 ```
 
-#removing samples with fewer than 1000 reads
+#suppression d'échantillons avec moins de 1000 reads
 ```{r}
 which(!rowSums(otu_table(ps)) > 1000)
 ```
+
 ```{r}
 ps <- prune_samples(rowSums(otu_table(ps)) > 1000, ps)
 pslog <- transform_sample_counts(ps, function(x) log(1 + x))
 ```
 
-#performing a PCoA using Bray-Curtis dissimilarity
+### effectuer une PCoA en utilisant l'indice de dissimilarité de Bray-Curtis
 ```{r}
 out.pcoa.log <- ordinate(pslog,  method = "MDS", distance = "bray")
 evals <- out.pcoa.log$values[,1]
@@ -273,7 +268,12 @@ plot_ordination(pslog, out.pcoa.log, color = "age_binned",
   labs(col = "Binned Age", shape = "Litter")+
   coord_fixed(sqrt(evals[2] / evals[1]))
 ```
-#Performing a double principal coordinates analysis (DPCoA)
+#On voit qu'il y a un effet d'âge assez important qui est cohérent entre toutes les souris, mâles et femelles, et de portées différentes.
+
+### Effectuer une analyse des coordonnées principales doubles (DPCoA)
+
+#C'est une méthode d'ordination phylogénétique et qui fournit une représentation en double tracé des échantillons et des rangs taxonomiques. Nous voyons à nouveau que le deuxième axe correspond aux souris jeunes vs âgées, et le biplot suggère une interprétation du deuxième axe: les échantillons qui ont des scores plus élevés sur le deuxième axe ont plus de taxons de Bacteroidetes et un sous-ensemble de Firmicutes.
+
 ```{r}
 out.dpcoa.log <- ordinate(pslog, method = "DPCoA")
 evals <- out.dpcoa.log$eig
@@ -282,13 +282,15 @@ plot_ordination(pslog, out.dpcoa.log, color = "age_binned", label= "SampleID",
   labs(col = "Binned Age", shape = "Litter")+
   coord_fixed(sqrt(evals[2] / evals[1]))
 ```
+#Sur la figure en dessus, nous avons le premier axe exprimant 75% de la variabilité, environ 9 fois celle du deuxième axe; cela se traduit par la forme allongée du tracé d'ordination.
 
-# translation into the elongated form of the ordination plot
+
 ```{r}
 plot_ordination(pslog, out.dpcoa.log, type = "species", color = "Phylum") +
   coord_fixed(sqrt(evals[2] / evals[1]))
 ```
-#PCoA with weighted Unifrac
+### PCoA avec Unifrac pondéré
+
 ```{r}
 out.wuf.log <- ordinate(pslog, method = "PCoA", distance ="wunifrac")
 evals <- out.wuf.log$values$Eigenvalues
@@ -297,7 +299,11 @@ plot_ordination(pslog, out.wuf.log, color = "age_binned",
   coord_fixed(sqrt(evals[2] / evals[1])) +
   labs(col = "Binned Age", shape = "Litter")
 ```
-#PCA on ranks
+#Comme précédemment, nous constatons que le deuxième axe est associé à un effet d'âge, assez similaire au DPCoA. Cela n'est pas surprenant, car les deux sont des méthodes d'ordination phylogénétique prenant en compte l'abondance. Cependant, lorsque nous comparons les biplots, nous voyons que le DPCoA a donné une interprétation beaucoup plus claire du deuxième axe, par rapport à l'Unifrac pondéré.
+
+### PCA sur les rangs
+#Les données sur l'abondance microbienne sont souvent peu détaillés. Par conséquent, il peut parfois être difficile d'identifier une transformation qui ramène les données à la normalité. Dans ces cas, il peut être plus sûr d'ignorer complètement les abondances brutes et de travailler à la place avec des rangs. Pour cela, on utilise une version transformée par rang des données pour effectuer l'ACP. 
+#Tout d'abord, nous créons une nouvelle matrice, représentant les abondances par leurs rangs.
 ```{r}
 abund <- otu_table(pslog)
 abund_ranks <- t(apply(abund, 1, rank))
@@ -307,6 +313,7 @@ abund_ranks <- t(apply(abund, 1, rank))
 abund_ranks <- abund_ranks - 329
 abund_ranks[abund_ranks < 1] <- 1
 ```
+
 ```{r}
 library(dplyr)
 library(reshape2)
@@ -327,6 +334,7 @@ ggplot(abund_df %>%
   scale_color_brewer(palette = "Set2")
 ```
 
+#Nous pouvons maintenant effectuer une PCA et étudier le biplot résultant, donné dans la figure ci-dessous. Pour produire une annotation pour cette figure, nous avons utilisé le bloc suivant.
 ```{r}
 library(ade4)
 ranks_pca <- dudi.pca(abund_ranks, scannf = F, nf = 3)
@@ -359,8 +367,11 @@ ggplot() +
   coord_fixed(sqrt(ranks_pca$eig[2] / ranks_pca$eig[1])) +
   theme(panel.border = element_rect(color = "#787878", fill = alpha("white", 0)))
 ```
+#Les résultats sont similaires aux analyses PCoA calculées sans appliquer une transformation de classement tronqué, renforçant notre confiance dans l'analyse sur les données d'origine.
+### Correspondance canonique
+#L'analyse de correspondance canonique (CCpnA) est une approche d'ordination d'espèce par table d'échantillons en prenant en compte des informations supplémentaires sur les échantillons.
 
-#Canonical correspondence
+#Comme pour la PCoA et la DPCoA, cette méthode peut être exécutée en utilisant le package phyloseq. Afin d'integrer des données supplémentaires, il est nécessaire de fournir un argument supplémentaire, spécifiant les caractéristiques à prendre en compte.
 ```{r}
 ps_ccpna <- ordinate(pslog, "CCA", formula = pslog ~ age_binned + family_relationship)
 ```
@@ -392,7 +403,9 @@ ggplot() +
   coord_fixed(sqrt(ps_ccpna$CCA$eig[2] / ps_ccpna$CCA$eig[1])*0.45   ) +
   theme(panel.border = element_rect(color = "#787878", fill = alpha("white", 0)))
 ```
-##Supervised learning
+
+# 6- Enseignement supervisé
+#Nous allons d'abord examiner la PLS. La première étape consiste à diviser les données en ensembles d'apprentissage et de test, les affectations étant effectuées à la souris plutôt que par échantillon, pour garantir que l'ensemble de test simule de manière réaliste la collecte de nouvelles données. Une fois que nous avons divisé les données, nous pouvons utiliser le train de fonctions pour ajuster le modèle PLS.
 ```{r}
 library(caret)
 library(lattice)
@@ -411,6 +424,7 @@ plsFit <- train(age ~ ., data = training,
 plsClasses <- predict(plsFit, newdata = testing)
 table(plsClasses, testing$age)
 ```
+#Pour interpréter ces PLS, il faut produire respectivement des biplots et des graphiques de proximité. Le code ci-dessous extrait les coordonnées et fournit des annotations pour les points à inclure sur le biplot PLS.
 ```{r}
 library(vegan); packageVersion("vegan")
 library(permute)
@@ -430,6 +444,15 @@ tax$Order <- factor(tax$Order, levels = c(main_orders, "Other"))
 class(pls_biplot$loadings) <- "matrix"
 pls_biplot$loadings <- data.frame(tax, pls_biplot$loadings)
 ```
+
+```{r}
+library(randomForest)
+rfFit <- train(age ~ ., data = training, method = "rf",
+               preProc = "center", proximity = TRUE)
+rfClasses <- predict(rfFit, newdata = testing)
+table(rfClasses, testing$age)
+```
+
 ```{r}
 ggplot() +
   geom_point(data = pls_biplot$scores,
@@ -443,6 +466,7 @@ ggplot() +
   facet_grid( ~ age2) +
   theme(panel.border = element_rect(color = "#787878", fill = alpha("white", 0)))
 ```
+#Le biplot résultant est affiché sur la figure peut être interprété de la même manière que les diagrammes d'ordination antérieurs, à l'exception du fait que la projection est choisie avec une référence explicite à la variable d'âge groupée. Plus précisément, PLS identifie un sous-espace pour maximiser la discrimination entre les classes, et le biplot affiche des projections d'échantillons et des coefficients ASV par rapport à ce sous-espace.
 ```{r}
 rf_prox <- cmdscale(1 - rfFit$finalModel$proximity) %>%
   data.frame(sample_data(pslog)[inTrain, ])
@@ -454,11 +478,12 @@ ggplot(rf_prox) +
   guides(col = guide_legend(override.aes = list(size = 4))) +
   labs(col = "Binned Age", x = "Axis1", y = "Axis2")
 ```
-
+#Pour générer cette représentation, une distance est calculée entre les échantillons en fonction de la fréquence à laquelle l'échantillon se produit dans la même partition d'arbre dans la procédure d'amorçage de la forêt aléatoire. Si une paire d'échantillons se produit fréquemment dans la même partition, la paire se voit attribuer une faible distance. Les distances résultantes sont ensuite entrées dans le PCoA, donnant un aperçu du mécanisme de classification par ailleurs complexe des forêts aléatoires. La séparation entre les classes est claire et l'inspection manuelle des points révélerait quels types d'échantillons sont plus faciles ou plus difficiles à classer.
 
 ```{r}
 as.vector(tax_table(ps)[which.max(importance(rfFit$finalModel)), c("Family", "Genus")])
 ```
+
 ```{r}
 impOtu <- as.vector(otu_table(pslog)[,which.max(importance(rfFit$finalModel))])
 maxImpDF <- data.frame(sample_data(pslog), abund = impOtu)
@@ -466,8 +491,11 @@ ggplot(maxImpDF) +   geom_histogram(aes(x = abund)) +
   facet_grid(age2 ~ .) +
   labs(x = "Abundance of discriminative bacteria", y = "Number of samples")
 ```
-##Graph-based analyses
-#Creating and plotting graphs
+#Pour mieux comprendre le modèle de forêt aléatoire ajusté, nous identifions le microbe ayant le plus d'influence dans la prédiction aléatoire de la forêt. Il s'agit d'un microbe de la famille des Lachnospiracées et du genre Roseburia. La figure 19 représente son abondance dans les échantillons; on voit qu'il est uniformément très bas de 0 à 100 jours et beaucoup plus élevé de 100 à 400 jours.
+
+# 7- Analyses basées sur les graphes
+## a) Création des graphes 
+#Ci-dessous, nous créons un réseau avec l'indice de  Jaccard (la distance par défaut pour la fonction make_network) à .35, puis nous ajoutons un attribut aux sommets indiquant de quelle souris provient l'échantillon et de quelle portée se trouvait la souris. Ensuite, nous pouvons tracer le réseau avec la coloration à la souris et la forme par portée.
 ```{r}
 library("phyloseqGraphTest")
 library("igraph")
@@ -484,21 +512,26 @@ ggplot(net_graph, aes(x = x, y = y, xend = xend, yend = yend), layout = "fruchte
         legend.key.height = unit(0.5,"line")) +
   guides(col = guide_legend(override.aes = list(size = .5)))
 ```
-##Graph-based two-sample tests
-#Minimum Spanning Tree (MST)
+# Nous pouvons voir qu'il existe un regroupement des échantillons par souris et par portée.
+
+## b)Tests à deux échantillons basés sur des graphiques
+### Analyse MST
+#Nous voulons savoir si les deux portées (family_relationship) proviennent de la même distribution.
 ```{r}
 gt <- graph_perm_test(ps, "family_relationship", grouping = "host_subject_id",
                       distance = "jaccard", type = "mst")
 gt$pval
 ```
+
 ```{r}
 plotNet1=plot_test_network(gt) + theme(legend.text = element_text(size = 8),
         legend.title = element_text(size = 9))
 plotPerm1=plot_permutations(gt)
 grid.arrange(ncol = 2,  plotNet1, plotPerm1)
 ```
-
-#Nearest neighbors
+#Suite à la faible valeur de la p value, l'hypothèse nulle est rejetée, et donc les echantillons ne proviennent pas de la même distribution. Les echantillons sont plus grouppés par portée.
+### Groupes les plus proches
+#Une arête est placée entre deux échantillons à chaque fois que l'un d'eux est dans l'ensemble des groupes plus proches de l'autre.
 ```{r}
 gt <- graph_perm_test(ps, "family_relationship", grouping = "host_subject_id",
                       distance = "jaccard", type = "knn", knn = 1)
@@ -507,9 +540,66 @@ plotNet2=plot_test_network(gt) + theme(legend.text = element_text(size = 8),
 plotPerm2=plot_permutations(gt)
 grid.arrange(ncol = 2,  plotNet2, plotPerm2)
 ```
+#On peut voir à partir du graphique que si une arête est présente entre deux echantillons, il y a une forte chance qu'ils proviennent de la même portée.
 
-##linear modeling
-#Hierarchical multiple testing
+## c) modélisation linéaire
+
+```{r}
+library("nlme")
+library("reshape2")
+ps_alpha_div <- estimate_richness(ps, split = TRUE, measure = "Shannon")
+ps_alpha_div$SampleID <- rownames(ps_alpha_div) %>%
+  as.factor()
+ps_samp <- sample_data(ps) %>%
+  unclass() %>%
+  data.frame() %>%
+  left_join(ps_alpha_div, by = "SampleID") %>%
+  melt(measure.vars = "Shannon",
+       variable.name = "diversity_measure",
+       value.name = "alpha_diversity")
+
+# reorder's facet from lowest to highest diversity
+diversity_means <- ps_samp %>%
+  group_by(host_subject_id) %>%
+  summarise(mean_div = mean(alpha_diversity)) %>%
+  arrange(mean_div)
+ps_samp$host_subject_id <- factor(ps_samp$host_subject_id)
+#                                  diversity_means$host_subject_id)
+```
+
+```{r}
+alpha_div_model <- lme(fixed = alpha_diversity ~ age_binned, data = ps_samp,
+                       random = ~ 1 | host_subject_id)
+```
+
+
+```{r}
+new_data <- expand.grid(host_subject_id = levels(ps_samp$host_subject_id),
+                        age_binned = levels(ps_samp$age_binned))
+new_data$pred <- predict(alpha_div_model, newdata = new_data)
+X <- model.matrix(eval(eval(alpha_div_model$call$fixed)[-2]),
+                  new_data[-ncol(new_data)])
+pred_var_fixed <- diag(X %*% alpha_div_model$varFix %*% t(X))
+new_data$pred_var <- pred_var_fixed + alpha_div_model$sigma ^ 2
+# fitted values, with error bars
+ggplot(ps_samp %>% left_join(new_data)) +
+  geom_errorbar(aes(x = age_binned, ymin = pred - 2 * sqrt(pred_var),
+                    ymax = pred + 2 * sqrt(pred_var)),
+                col = "#858585", size = .1) +
+  geom_point(aes(x = age_binned, y = alpha_diversity,
+                 col = family_relationship), size = 0.8) +
+  facet_wrap(~host_subject_id) +
+  scale_y_continuous(limits = c(2.4, 4.6), breaks = seq(0, 5, .5)) +
+  scale_color_brewer(palette = "Set2") +
+  labs(x = "Binned Age", y = "Shannon Diversity", color = "Litter") +
+  guides(col = guide_legend(override.aes = list(size = 4))) +
+  theme(panel.border = element_rect(color = "#787878", fill = alpha("white", 0)),
+        axis.text.x = element_text(angle = -90, size = 6),
+        axis.text.y = element_text(size = 6))
+```
+
+## d)Tests multiples hiérarchiques
+#Le test d'hypothèse peut être utilisé pour identifier les microbes individuels dont l'abondance est liée à des variables d'échantillons d'intérêt. Nous appliquons cette méthode pour tester l'association entre l'abondance microbienne et l'âge. Cela fournit une vue complémentaire des analyses précédentes, identifiant les bactéries individuelles responsables des différences entre les souris jeunes et âgées.
 ```{r}
 library("reshape2")
 library("DESeq2")
@@ -533,6 +623,7 @@ ps_dds <- estimateSizeFactors(ps_dds, geoMeans = geoMeans)
 ps_dds <- estimateDispersions(ps_dds)
 abund <- getVarianceStabilizedData(ps_dds)
 ```
+
 ```{r}
 short_names <- substr(rownames(abund), 1, 5)%>%
   make.names(unique = TRUE)
@@ -549,6 +640,8 @@ ggplot(abund_sums) +
   facet_grid(type ~ .) +
   xlab("Total abundance within sample")
 ```
+#L'histogramme sur le dessus donne l'abondance totale transformée DESeq2 dans chaque échantillon. 
+
 ```{r}
 library("structSSI")
 el <- phy_tree(pslog)$edge
@@ -564,6 +657,7 @@ unadj_p <- treePValues(el, abund, sample_data(pslog)$age_binned)
 hfdr_res <- hFDR.adjust(unadj_p, el, .75)
 summary(hfdr_res)
 ```
+
 ```{r}
 #interactive part: not run
 plot(hfdr_res, height = 5000) # opens in a browser
@@ -579,13 +673,16 @@ tax %>%
   left_join(hfdr_res@p.vals) %>%
   arrange(adjp) %>% head(10)
 ```
-##Multitable techniques
+# 8- Techniques multitables
+#Ici, nous nous concentrerons sur un flux de travail spécifique qui utilise une analyse CCA, une méthode bien adaptée à la fois aux comparaisons exploratoires entre échantillons et à l'identification de caractéristiques présentant des variations intéressantes. Nous utiliserons une implémentation de la PMA.
 ```{r}
 metab <- read.csv("https://raw.githubusercontent.com/spholmes/F1000_workflow/master/data/metabolites.csv",row.names = 1)
 microbe_connect <-url("https://raw.githubusercontent.com/spholmes/F1000_workflow/master/data/microbe.rda")
 load(microbe_connect)
 microbe
 ```
+#Nous voyons que le microbe est un objet phyloseq. Notre prétraitement reflète celui des données de la souris. Nous filtrons d'abord les microbes et les métabolites d'intérêt, en supprimant ceux qui sont nuls sur de nombreux échantillons. Ensuite, nous les transformons pour affaiblir les queues lourdes. Nous prenons également le journal des métabolites.
+
 ```{r}
 library("genefilter")
 keep_ix <- rowSums(metab == 0) <= 3
@@ -597,17 +694,21 @@ X <- otu_table(microbe)
 X[X > 50] <- 50
 dim(X)
 ```
+
 ```{r}
 dim(metab)
 
 ```
+#Nous voyons que X et metab ont 12 colonnes, ce sont en fait les échantillons et nous les transposerons. Dans le but de comparer des ensembles d'entités dans des tables de données de grande dimension, où il peut y avoir plus d'entités mesurées que d'échantillons, une CCA est appliquée. Nous appliquons ensuite l'ACP.La CCA est donc utilisé comme procédure de dépistage, plutôt que comme méthode d'ordination.
 ```{r}
 library(PMA)
 cca_res <- CCA(t(X),  t(metab), penaltyx = .15, penaltyz = .15)
 ```
+
 ```{r}
 cca_res
 ```
+#Avec ces paramètres, 5 microbes et 15 métabolites ont été sélectionnés, en fonction de leur capacité à expliquer la covariation entre les tableaux. De plus, ces 20 caractéristiques entraînent une corrélation de 0,974 entre les deux tableaux. Nous interprétons cela comme signifiant que les données microbiennes et métabolomiques reflètent des signaux sous-jacents similaires, et que ces signaux peuvent être bien approximés par les 20 caractéristiques sélectionnées. Cependant, méfiez-vous de la valeur de corrélation, car les scores sont loin du nuage normal bivarié habituel. De plus, notez qu'il est possible que d'autres sous-ensembles de fonctionnalités puissent tout aussi bien expliquer les données - une CCA clairsemée a minimisé la redondance entre les fonctionnalités, mais ne garantit en aucun cas que ce sont les «vraies» fonctionnalités.
 
 ```{r}
 combined <- cbind(t(X[cca_res$u != 0, ]),
@@ -645,4 +746,7 @@ ggplot() +  geom_point(data = sample_info,
                    100 * round(pca_res$eig[2] / sum(pca_res$eig), 2)),
        fill = "Feature Type", col = "Sample Type")
 ```
-
+#La figure représente différents types d'échantillons et les caractéristiques multidomaines (métabolites et OTU). Cela permet une comparaison entre les échantillons mesurés - triangles pour Knockout et cercles pour le type sauvage - et caractérise l'influence des différentes caractéristiques - des losanges avec des étiquettes de texte. Par exemple, nous voyons que la principale variation des données se situe entre les échantillons PD et ST, qui correspondent aux différents régimes.
+ 
+# CONCLUSION
+#Ce travail permet de voir comment un flux de travail complet dans R est maintenant disponible pour débruiter, identifier et normaliser les lectures de séquençage d'amplicon de nouvelle génération à l'aide de modèles probabilistes avec des paramètres ajustés en utilisant les données disponibles.
